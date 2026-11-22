@@ -53,7 +53,8 @@ Deno.serve(async (req) => {
         recurs_annually,
         timezone,
         owner_user_id,
-        profiles:owner_user_id ( display_name ),
+        recipient_user_id,
+        recipient_name,
         occasion_reminders!inner (
           id,
           viewer_user_id,
@@ -78,7 +79,7 @@ Deno.serve(async (req) => {
     const messagesToSend: PushMessage[] = [];
 
     for (const occ of occasions || []) {
-      const ownerName = (occ.profiles as any)?.display_name || 'Your partner';
+      const recipientName = occ.recipient_name || 'Someone special';
       const parts = occ.date.split('-').map(Number);
       const origMonth = parts[1] - 1;
       const origDay = parts[2];
@@ -143,8 +144,8 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const notificationTitle = `${ownerName}'s ${occ.name}`;
-        const notificationBody = `${ownerName} has an occasion in a month. Take a look at their gift wishlist!`;
+        const notificationTitle = `${recipientName}'s ${occ.name}`;
+        const notificationBody = `${recipientName}'s ${occ.name} is in a month! Take a look at their gift wishlist.`;
 
         for (const device of devices) {
           messagesToSend.push({

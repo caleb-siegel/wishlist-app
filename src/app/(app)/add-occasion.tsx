@@ -13,14 +13,12 @@ import {
   Switch,
   useColorScheme,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/context/auth';
-import { OccasionsService } from '@/services/occasions';
-import { SharingService } from '@/services/sharing';
+import { OccasionsService, ConnectedPartner, OCCASION_COLORS } from '@/services/occasions';
 import { NotificationService } from '@/services/notifications';
-import { calculateOneMonthPriorDate, calculateNextOccurrence } from '@/utils/date-utils';
-import { WishlistShare, Profile } from '@/types/database.types';
+import { calculateNextOccurrence } from '@/utils/date-utils';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '@/constants/theme';
 
 const MONTH_NAMES = [
@@ -38,37 +36,61 @@ const MONTH_NAMES = [
   'December',
 ];
 
-const QUICK_OCCASIONS = ['🎂 Birthday', '💍 Anniversary', '💝 Valentine\'s Day', '🎄 Christmas'];
+const QUICK_OCCASIONS = ['🎂 Birthday', '💍 Anniversary', '💝 Valentine\'s Day', '🎄 Christmas', '🎓 Graduation'];
 
 export default function AddOccasionScreen() {
   const router = useRouter();
-  const { user, profile } = useAuth();
+  const params = useLocalSearchParams<{ month?: string; day?: string; year?: string }>();
+  const { user } = useAuth();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme === 'dark' ? 'dark' : 'light'];
 
   const now = new Date();
+  const initialMonth =
+    params.month !== undefined && !isNaN(Number(params.month))
+      ? Number(params.month)
+      : now.getMonth();
+  const initialDay =
+    params.day !== undefined && !isNaN(Number(params.day))
+      ? Number(params.day)
+      : now.getDate();
+
   const [name, setName] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState(now.getMonth()); // 0-indexed
-  const [selectedDay, setSelectedDay] = useState(now.getDate());
+  const [selectedMonth, setSelectedMonth] = useState(initialMonth); // 0-indexed
+  const [selectedDay, setSelectedDay] = useState(initialDay);
   const [recursAnnually, setRecursAnnually] = useState(true);
 
-  // Connected partners eligible for reminders
-  const [partners, setPartners] = useState<(WishlistShare & { viewer_profile?: Profile })[]>([]);
-  const [selectedPartnerIds, setSelectedPartnerIds] = useState<string[]>([]);
+  // Partner selection
+  const [partners, setPartners] = useState<ConnectedPartner[]>([]);
+  const [selectedPartnerId, setSelectedPartnerId] = useState<string | null>(null);
+  const [customRecipientName, setCustomRecipientName] = useState('');
+  const [selectedColor, setSelectedColor] = useState<string>(OCCASION_COLORS[0]);
   const [loadingPartners, setLoadingPartners] = useState(true);
 
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (!user) return;
-    SharingService.getActiveSharesAsOwner(user.id)
-      .then(({ shares }) => {
-        setPartners(shares);
-        // By default, select all active partners for reminders
-        setSelectedPartnerIds(shares.map((s) => s.viewer_user_id));
+    OccasionsService.getConnectedPartners(user.id)
+      .then(({ partners: connected }) => {
+        setPartners(connected);
+        if (connected.length > 0) {
+          setSelectedPartnerId(connected[0].userId);
+          setSelectedColor(connected[0].colorCode);
+        }
       })
       .finally(() => setLoadingPartners(false));
   }, [user]);
+
+  // When user selects a partner, default to their color
+  const handleSelectPartner = (partner: ConnectedPartner) => {
+    setSelectedPartnerId(partner.userId);
+    setSelectedColor(partner.colorCode);
+  };
+
+  const handleSelectCustom = () => {
+    setSelectedPartnerId(null);
+  };
 
   // Calculate reminder preview
   const currentYear = now.getFullYear();
@@ -77,25 +99,22 @@ export default function AddOccasionScreen() {
   ).padStart(2, '0')}`;
   const occurrenceInfo = calculateNextOccurrence(dateString, recursAnnually);
 
-  const togglePartnerReminder = (partnerId: string) => {
-    if (selectedPartnerIds.includes(partnerId)) {
-      setSelectedPartnerIds(selectedPartnerIds.filter((id) => id !== partnerId));
-    } else {
-      setSelectedPartnerIds([...selectedPartnerIds, partnerId]);
+  const getRecipientDisplayName = () => {
+    if (selectedPartnerId) {
+      const partner = partners.find((p) => p.userId === selectedPartnerId);
+      return partner?.displayName || 'Partner';
     }
+    return customRecipientName.trim() || 'Someone special';
   };
 
   const handleSendTestNotification = async () => {
     if (!user) return;
-
-    // Register push permission
     await NotificationService.registerForPushNotifications(user.id);
-
+    const recipient = getRecipientDisplayName();
     const occasionTitle = name.trim() || 'Special Occasion';
-    const ownerName = profile?.display_name || 'Your partner';
 
-    await OccasionsService.triggerTestReminder(ownerName, occasionTitle);
-    Alert.alert('Test Notification Sent!', 'Check your notifications bar or lock screen to preview the alert banner.');
+    await OccasionsService.triggerTestReminder(recipient, occasionTitle);
+    Alert.alert('Test Notification Sent!', 'Check your notifications bar or lock screen to preview the reminder banner.');
   };
 
   const handleSave = async () => {
@@ -106,19 +125,25 @@ export default function AddOccasionScreen() {
       return;
     }
 
-    setIsSaving(true);
-
-    // Request notification permissions if partners are selected
-    if (selectedPartnerIds.length > 0) {
-      await NotificationService.registerForPushNotifications(user.id);
+    if (!selectedPartnerId && !customRecipientName.trim()) {
+      Alert.alert('Missing Recipient', 'Please select a partner or enter who this occasion is for.');
+      return;
     }
+
+    setIsSaving(true);
+    await NotificationService.registerForPushNotifications(user.id);
+
+    const partner = partners.find((p) => p.userId === selectedPartnerId);
+    const recipientName = partner ? partner.displayName : customRecipientName.trim();
 
     const { error } = await OccasionsService.createOccasion({
       owner_user_id: user.id,
+      recipient_user_id: selectedPartnerId,
+      recipient_name: recipientName,
+      color_code: selectedColor,
       name: name.trim(),
       date: dateString,
       recurs_annually: recursAnnually,
-      viewerIdsForReminders: selectedPartnerIds,
     });
 
     setIsSaving(false);
@@ -137,6 +162,127 @@ export default function AddOccasionScreen() {
       <ScrollView
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled">
+        
+        {/* Recipient Card */}
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: colors.card, borderColor: colors.cardBorder },
+            Shadows?.subtle,
+          ]}>
+          <Text style={[styles.sectionHeading, { color: colors.text }]}>Who is this occasion for? *</Text>
+          <Text style={[styles.sectionSubtitle, { color: colors.textSecondary }]}>
+            Assign this occasion to a partner who shared their wishlist with you.
+          </Text>
+
+          {loadingPartners ? (
+            <ActivityIndicator color={colors.primary} />
+          ) : (
+            <View style={{ gap: Spacing.sm }}>
+              {partners.map((partner) => {
+                const isSelected = selectedPartnerId === partner.userId;
+                return (
+                  <TouchableOpacity
+                    key={partner.userId}
+                    style={[
+                      styles.partnerSelectRow,
+                      { backgroundColor: colors.backgroundElement, borderColor: colors.border },
+                      isSelected && { borderColor: partner.colorCode, borderWidth: 2 },
+                    ]}
+                    onPress={() => handleSelectPartner(partner)}
+                    activeOpacity={0.8}>
+                    <View style={[styles.avatarCircle, { backgroundColor: partner.colorCode }]}>
+                      <Text style={styles.avatarInitial}>
+                        {partner.displayName.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.partnerName, { color: colors.text }]}>{partner.displayName}</Text>
+                      <Text style={[styles.partnerSub, { color: colors.textSecondary }]}>Connected Partner</Text>
+                    </View>
+                    <Ionicons
+                      name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={22}
+                      color={isSelected ? partner.colorCode : colors.textMuted}
+                    />
+                  </TouchableOpacity>
+                );
+              })}
+
+              {/* Other / Custom Option */}
+              <TouchableOpacity
+                style={[
+                  styles.partnerSelectRow,
+                  { backgroundColor: colors.backgroundElement, borderColor: colors.border },
+                  selectedPartnerId === null && { borderColor: colors.primary, borderWidth: 2 },
+                ]}
+                onPress={handleSelectCustom}
+                activeOpacity={0.8}>
+                <View style={[styles.avatarCircle, { backgroundColor: colors.textMuted }]}>
+                  <Ionicons name="person-add" size={16} color="#FFFFFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.partnerName, { color: colors.text }]}>Other Person / Custom</Text>
+                  <Text style={[styles.partnerSub, { color: colors.textSecondary }]}>Add someone else (Mom, Friend, etc.)</Text>
+                </View>
+                <Ionicons
+                  name={selectedPartnerId === null ? 'checkmark-circle' : 'ellipse-outline'}
+                  size={22}
+                  color={selectedPartnerId === null ? colors.primary : colors.textMuted}
+                />
+              </TouchableOpacity>
+
+              {selectedPartnerId === null && (
+                <View
+                  style={[
+                    styles.inputWrapper,
+                    { backgroundColor: colors.backgroundElement, borderColor: colors.border, marginTop: Spacing.xs },
+                  ]}>
+                  <TextInput
+                    style={[styles.input, { color: colors.text }]}
+                    placeholder="Enter name (e.g. Mom, Best Friend)"
+                    placeholderTextColor={colors.textMuted}
+                    value={customRecipientName}
+                    onChangeText={setCustomRecipientName}
+                  />
+                </View>
+              )}
+            </View>
+          )}
+        </View>
+
+        {/* Color Theme Card */}
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: colors.card, borderColor: colors.cardBorder },
+            Shadows?.subtle,
+          ]}>
+          <Text style={[styles.sectionHeading, { color: colors.text }]}>Event Color Tag</Text>
+          <Text style={[styles.sectionSubtitle, { color: colors.textSecondary }]}>
+            This color will highlight their dates on the calendar.
+          </Text>
+
+          <View style={styles.colorPaletteRow}>
+            {OCCASION_COLORS.map((hex) => {
+              const isSelected = selectedColor === hex;
+              return (
+                <TouchableOpacity
+                  key={hex}
+                  style={[
+                    styles.colorCircle,
+                    { backgroundColor: hex },
+                    isSelected && styles.colorCircleSelected,
+                  ]}
+                  onPress={() => setSelectedColor(hex)}
+                  activeOpacity={0.8}>
+                  {isSelected && <Ionicons name="checkmark" size={18} color="#FFFFFF" />}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
         {/* Name Card */}
         <View
           style={[
@@ -156,7 +302,7 @@ export default function AddOccasionScreen() {
                   style={[
                     styles.chip,
                     name === cleanChipName
-                      ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                      ? { backgroundColor: selectedColor, borderColor: selectedColor }
                       : { backgroundColor: colors.backgroundElement, borderColor: colors.border },
                   ]}
                   onPress={() => setName(cleanChipName)}>
@@ -210,7 +356,7 @@ export default function AddOccasionScreen() {
                     style={[
                       styles.monthPill,
                       selectedMonth === idx
-                        ? { backgroundColor: colors.primary, borderColor: colors.primary }
+                        ? { backgroundColor: selectedColor, borderColor: selectedColor }
                         : { backgroundColor: colors.backgroundElement, borderColor: colors.border },
                     ]}
                     onPress={() => setSelectedMonth(idx)}>
@@ -256,7 +402,7 @@ export default function AddOccasionScreen() {
             <Switch
               value={recursAnnually}
               onValueChange={setRecursAnnually}
-              trackColor={{ false: colors.border, true: colors.primary }}
+              trackColor={{ false: colors.border, true: selectedColor }}
             />
           </View>
         </View>
@@ -265,15 +411,16 @@ export default function AddOccasionScreen() {
         <View
           style={[
             styles.previewCard,
-            { backgroundColor: colors.primaryLight, borderColor: colors.primary },
+            { backgroundColor: `${selectedColor}15`, borderColor: selectedColor },
           ]}>
-          <Ionicons name="notifications" size={24} color={colors.primary} />
+          <Ionicons name="notifications" size={24} color={selectedColor} />
           <View style={{ flex: 1, gap: 2 }}>
-            <Text style={[styles.previewTitle, { color: colors.primary }]}>
-              1-Month Push Reminder
+            <Text style={[styles.previewTitle, { color: selectedColor }]}>
+              Your 1-Month Shopping Reminder
             </Text>
             <Text style={[styles.previewBody, { color: colors.textSecondary }]}>
-              Scheduled for:{' '}
+              You will be reminded to buy gifts for{' '}
+              <Text style={{ fontWeight: '700', color: colors.text }}>{getRecipientDisplayName()}</Text> on{' '}
               <Text style={{ fontWeight: '700', color: colors.text }}>
                 {occurrenceInfo.nextReminderDate.toLocaleDateString(undefined, {
                   month: 'long',
@@ -289,68 +436,13 @@ export default function AddOccasionScreen() {
           </View>
         </View>
 
-        {/* Partner Reminders Selection */}
-        <View
-          style={[
-            styles.card,
-            { backgroundColor: colors.card, borderColor: colors.cardBorder },
-            Shadows?.subtle,
-          ]}>
-          <Text style={[styles.sectionHeading, { color: colors.text }]}>
-            Who Should Receive Reminders?
-          </Text>
-          <Text style={[styles.sectionSubtitle, { color: colors.textSecondary }]}>
-            Select connected partners to receive the 1-month-prior notification.
-          </Text>
-
-          {loadingPartners ? (
-            <ActivityIndicator color={colors.primary} />
-          ) : partners.length === 0 ? (
-            <Text style={[styles.noPartnersText, { color: colors.textSecondary }]}>
-              You haven't connected with any partners yet. You can invite a partner anytime under the
-              Shared tab.
-            </Text>
-          ) : (
-            partners.map((partner) => {
-              const isSelected = selectedPartnerIds.includes(partner.viewer_user_id);
-              const partnerName = partner.viewer_profile?.display_name || 'Partner';
-
-              return (
-                <TouchableOpacity
-                  key={partner.id}
-                  style={[
-                    styles.partnerRow,
-                    { backgroundColor: colors.backgroundElement, borderColor: colors.border },
-                    isSelected && { borderColor: colors.primary },
-                  ]}
-                  onPress={() => togglePartnerReminder(partner.viewer_user_id)}
-                  activeOpacity={0.8}>
-                  <Ionicons
-                    name={isSelected ? 'checkbox' : 'square-outline'}
-                    size={22}
-                    color={isSelected ? colors.primary : colors.textMuted}
-                  />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.partnerRowName, { color: colors.text }]}>
-                      {partnerName}
-                    </Text>
-                    <Text style={[styles.partnerRowSub, { color: colors.textSecondary }]}>
-                      Will be reminded 1 month before
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })
-          )}
-        </View>
-
         {/* Instant Test Alert Button */}
         <TouchableOpacity
           style={[styles.testButton, { backgroundColor: colors.card, borderColor: colors.border }]}
           onPress={handleSendTestNotification}
           activeOpacity={0.8}>
-          <Ionicons name="paper-plane-outline" size={18} color={colors.primary} style={{ marginRight: 6 }} />
-          <Text style={[styles.testButtonText, { color: colors.primary }]}>
+          <Ionicons name="paper-plane-outline" size={18} color={selectedColor} style={{ marginRight: 6 }} />
+          <Text style={[styles.testButtonText, { color: selectedColor }]}>
             Send Immediate Test Alert (Preview on Phone)
           </Text>
         </TouchableOpacity>
@@ -359,7 +451,7 @@ export default function AddOccasionScreen() {
         <TouchableOpacity
           style={[
             styles.saveButton,
-            { backgroundColor: colors.primary },
+            { backgroundColor: selectedColor },
             isSaving && { opacity: 0.7 },
           ]}
           onPress={handleSave}
@@ -393,6 +485,54 @@ const styles = StyleSheet.create({
   },
   sectionSubtitle: {
     ...Typography.caption,
+  },
+  partnerSelectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    gap: Spacing.md,
+  },
+  avatarCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarInitial: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  partnerName: {
+    ...Typography.bodyBold,
+  },
+  partnerSub: {
+    ...Typography.small,
+  },
+  colorPaletteRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.md,
+    paddingVertical: Spacing.xs,
+  },
+  colorCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  colorCircleSelected: {
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 4,
   },
   chipRow: {
     flexDirection: 'row',
@@ -489,24 +629,6 @@ const styles = StyleSheet.create({
     ...Typography.caption,
   },
   previewSubtext: {
-    ...Typography.small,
-  },
-  noPartnersText: {
-    ...Typography.caption,
-    lineHeight: 18,
-  },
-  partnerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: Spacing.md,
-    borderRadius: BorderRadius.md,
-    borderWidth: 1,
-    gap: Spacing.md,
-  },
-  partnerRowName: {
-    ...Typography.bodyBold,
-  },
-  partnerRowSub: {
     ...Typography.small,
   },
   testButton: {

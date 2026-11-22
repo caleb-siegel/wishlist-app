@@ -132,6 +132,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (currentSession?.user) {
           ensureProfile(currentSession.user);
+          WidgetService.updateWidgetSnapshot({ isLoggedIn: true });
         }
       })
       .catch((err) => {
@@ -150,6 +151,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (newSession?.user) {
         ensureProfile(newSession.user);
+        WidgetService.updateWidgetSnapshot({ isLoggedIn: true });
       } else {
         setProfile(null);
       }

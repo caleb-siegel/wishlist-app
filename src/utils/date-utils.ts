@@ -88,3 +88,44 @@ export function formatOccasionDate(dateString: string): string {
     return dateString;
   }
 }
+
+/**
+ * Checks whether an occasion falls on a given calendar day (accounting for annual recurrence).
+ */
+export function doesOccasionMatchDate(
+  occasionDateString: string,
+  recursAnnually: boolean,
+  targetDate: Date
+): boolean {
+  try {
+    const parts = occasionDateString.split('-').map(Number);
+    const occYear = parts[0];
+    const occMonth = parts[1] - 1;
+    const occDay = parts[2];
+
+    if (recursAnnually) {
+      return targetDate.getMonth() === occMonth && targetDate.getDate() === occDay;
+    }
+    return (
+      targetDate.getFullYear() === occYear &&
+      targetDate.getMonth() === occMonth &&
+      targetDate.getDate() === occDay
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns total days in a month.
+ */
+export function getDaysInMonth(year: number, monthZeroIndexed: number): number {
+  return new Date(year, monthZeroIndexed + 1, 0).getDate();
+}
+
+/**
+ * Returns the weekday index (0 = Sun, 6 = Sat) of the first day of the month.
+ */
+export function getFirstDayOfWeek(year: number, monthZeroIndexed: number): number {
+  return new Date(year, monthZeroIndexed, 1).getDay();
+}

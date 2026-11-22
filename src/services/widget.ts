@@ -1,4 +1,4 @@
-import * as SecureStore from 'expo-secure-store';
+import { ExtensionStorage } from '@bacons/apple-targets';
 import { Platform } from 'react-native';
 
 export interface WidgetOccasion {
@@ -21,11 +21,24 @@ export interface WidgetDataSnapshot {
   updatedAt: string;
 }
 
+const APP_GROUP = 'group.com.calebsiegel.wishlist';
 const WIDGET_STORAGE_KEY = 'wishlist_widget_snapshot';
+
+let storageInstance: ExtensionStorage | null = null;
+function getStorage(): ExtensionStorage | null {
+  if (Platform.OS === 'ios') {
+    if (!storageInstance) {
+      storageInstance = new ExtensionStorage(APP_GROUP);
+    }
+    return storageInstance;
+  }
+  return null;
+}
 
 export const WidgetService = {
   /**
-   * Updates the snapshot shared with the native iOS and Android widgets.
+   * Updates the snapshot shared with the native iOS widget via App Groups.
+   * Merges with existing state so updating one tab does not erase another's data.
    * STRICT PRIVACY RULE: Never writes private shopper purchases or notes.
    */
   async updateWidgetSnapshot(data: {
@@ -34,10 +47,18 @@ export const WidgetService = {
     wishlistPreview?: WidgetItemPreview[];
   }): Promise<void> {
     try {
+      const existing = await this.getWidgetSnapshot();
+
       const snapshot: WidgetDataSnapshot = {
         isLoggedIn: data.isLoggedIn,
-        nextOccasion: data.nextOccasion || null,
-        wishlistPreview: data.wishlistPreview || [],
+        nextOccasion:
+          data.nextOccasion !== undefined
+            ? data.nextOccasion
+            : existing?.nextOccasion ?? null,
+        wishlistPreview:
+          data.wishlistPreview !== undefined
+            ? data.wishlistPreview
+            : existing?.wishlistPreview ?? [],
         updatedAt: new Date().toISOString(),
       };
 
@@ -50,7 +71,13 @@ export const WidgetService = {
         return;
       }
 
-      await SecureStore.setItemAsync(WIDGET_STORAGE_KEY, jsonString);
+      if (Platform.OS === 'ios') {
+        const storage = getStorage();
+        if (storage) {
+          storage.set(WIDGET_STORAGE_KEY, jsonString);
+          ExtensionStorage.reloadWidget();
+        }
+      }
     } catch (e) {
       console.warn('Failed to update widget snapshot:', e);
     }
@@ -60,11 +87,33 @@ export const WidgetService = {
    * Clears the widget snapshot on sign out so no private data remains visible.
    */
   async clearWidgetSnapshot(): Promise<void> {
-    await this.updateWidgetSnapshot({
-      isLoggedIn: false,
-      nextOccasion: null,
-      wishlistPreview: [],
-    });
+    try {
+      const snapshot: WidgetDataSnapshot = {
+        isLoggedIn: false,
+        nextOccasion: null,
+        wishlistPreview: [],
+        updatedAt: new Date().toISOString(),
+      };
+
+      const jsonString = JSON.stringify(snapshot);
+
+      if (Platform.OS === 'web') {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(WIDGET_STORAGE_KEY, jsonString);
+        }
+        return;
+      }
+
+      if (Platform.OS === 'ios') {
+        const storage = getStorage();
+        if (storage) {
+          storage.set(WIDGET_STORAGE_KEY, jsonString);
+          ExtensionStorage.reloadWidget();
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to clear widget snapshot:', e);
+    }
   },
 
   /**
@@ -80,8 +129,13 @@ export const WidgetService = {
         return null;
       }
 
-      const raw = await SecureStore.getItemAsync(WIDGET_STORAGE_KEY);
-      return raw ? JSON.parse(raw) : null;
+      if (Platform.OS === 'ios') {
+        const storage = getStorage();
+        const raw = storage?.get(WIDGET_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : null;
+      }
+
+      return null;
     } catch {
       return null;
     }

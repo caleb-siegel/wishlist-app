@@ -77,6 +77,9 @@ export interface WishlistShare {
 export interface Occasion {
   id: string;
   owner_user_id: string;
+  recipient_user_id: string | null;
+  recipient_name: string | null;
+  color_code: string;
   name: string;
   date: string; // YYYY-MM-DD
   recurs_annually: boolean;
@@ -84,6 +87,7 @@ export interface Occasion {
   enabled: boolean;
   created_at: string;
   updated_at: string;
+  recipient_profile?: Profile;
 }
 
 export interface OccasionReminder {

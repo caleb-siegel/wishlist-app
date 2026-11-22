@@ -47,14 +47,12 @@ const ExpoSecureStoreAdapter = {
   },
 };
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn(
-    'Supabase configuration missing: Please set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY in your .env file.'
-  );
-}
+const supabaseUrl =
+  process.env.EXPO_PUBLIC_SUPABASE_URL ||
+  'https://ifalzylyjuroqlicfyge.supabase.co';
+const supabaseAnonKey =
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+  'sb_publishable_lFa0BVBYatOrU06SyjLI7A_y-mIOgOi';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {

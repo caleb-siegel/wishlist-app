@@ -10,10 +10,10 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "bundleIdentifier": "com.calebsiegel.wishlist",
+      "appleTeamId": "SGK2UCNUW4",
       "supportsTablet": true,
       "entitlements": {
         "com.apple.security.application-groups": [
-          "group.com.calebsiegel.wishlist",
           "group.com.calebsiegel.wishlist"
         ]
       },
@@ -32,7 +32,7 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "output": "server",
+      "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
@@ -60,11 +60,6 @@
       "reactCompiler": true
     },
     "extra": {
-      "router": {
-        "asyncRoutes": {
-          "web": true
-        }
-      },
       "eas": {
         "projectId": "1973d778-a8a6-4fd6-884c-b8638ed48730",
         "build": {
