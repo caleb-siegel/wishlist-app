@@ -7,9 +7,17 @@ export type NotificationDeliveryStatus = 'pending' | 'sent' | 'failed';
 export interface Profile {
   id: string; // matches auth.users.id
   display_name: string | null;
+  email?: string | null;
   timezone: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface UserSearchResult {
+  id: string;
+  display_name: string | null;
+  email: string | null;
+  status: 'connected' | 'pending' | 'available';
 }
 
 export interface Wishlist {
@@ -54,12 +62,16 @@ export interface SharingInvitation {
   id: string;
   owner_user_id: string;
   invitee_email: string;
+  invitee_user_id?: string | null;
   token_hash: string;
   status: InvitationStatus;
   expires_at: string;
   accepted_by_user_id: string | null;
   created_at: string;
   updated_at: string;
+  // joined fields
+  owner_profile?: Profile;
+  invitee_profile?: Profile;
 }
 
 export interface WishlistShare {

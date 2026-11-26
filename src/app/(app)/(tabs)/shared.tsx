@@ -55,7 +55,7 @@ export default function SharedScreen() {
 
     try {
       const [invitesRes, sharedRes, purchasesRes] = await Promise.all([
-        user.email ? SharingService.getIncomingInvitations(user.email) : Promise.resolve({ invitations: [] }),
+        user.email ? SharingService.getIncomingInvitations(user.email, user.id) : Promise.resolve({ invitations: [] }),
         SharingService.getSharedWithMe(user.id),
         PurchasesService.getMyPurchases(user.id),
       ]);
@@ -176,39 +176,42 @@ export default function SharedScreen() {
         {/* Incoming Invitations Banner */}
         {incomingInvites.length > 0 && (
           <View style={styles.invitesSection}>
-            {incomingInvites.map((inv) => (
-              <View
-                key={inv.id}
-                style={[
-                  styles.inviteBanner,
-                  { backgroundColor: colors.primaryLight, borderColor: colors.primary },
-                  Shadows?.subtle,
-                ]}>
-                <Ionicons name="mail-unread" size={24} color={colors.primary} />
-                <View style={{ flex: 1, gap: 2 }}>
-                  <Text style={[styles.inviteTitle, { color: colors.text }]}>
-                    New Wishlist Invitation!
-                  </Text>
-                  <Text style={[styles.inviteSubtitle, { color: colors.textSecondary }]}>
-                    A partner invited your email to view their gift wishlist.
-                  </Text>
-                  <View style={styles.inviteActionRow}>
-                    <TouchableOpacity
-                      style={[styles.acceptBtn, { backgroundColor: colors.primary }]}
-                      onPress={() => handleAcceptInvite(inv)}>
-                      <Text style={styles.acceptBtnText}>Accept Access</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.declineBtn, { borderColor: colors.border }]}
-                      onPress={() => handleDeclineInvite(inv.id)}>
-                      <Text style={[styles.declineBtnText, { color: colors.textSecondary }]}>
-                        Decline
-                      </Text>
-                    </TouchableOpacity>
+            {incomingInvites.map((inv) => {
+              const inviterName = inv.owner_profile?.display_name || inv.owner_profile?.email || 'A partner';
+              return (
+                <View
+                  key={inv.id}
+                  style={[
+                    styles.inviteBanner,
+                    { backgroundColor: colors.primaryLight, borderColor: colors.primary },
+                    Shadows?.subtle,
+                  ]}>
+                  <Ionicons name="mail-unread" size={24} color={colors.primary} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={[styles.inviteTitle, { color: colors.text }]}>
+                      Wishlist Invitation from {inviterName}
+                    </Text>
+                    <Text style={[styles.inviteSubtitle, { color: colors.textSecondary }]}>
+                      {inviterName} invited you to view and shop from their gift wishlist!
+                    </Text>
+                    <View style={styles.inviteActionRow}>
+                      <TouchableOpacity
+                        style={[styles.acceptBtn, { backgroundColor: colors.primary }]}
+                        onPress={() => handleAcceptInvite(inv)}>
+                        <Text style={styles.acceptBtnText}>Accept Access</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.declineBtn, { borderColor: colors.border }]}
+                        onPress={() => handleDeclineInvite(inv.id)}>
+                        <Text style={[styles.declineBtnText, { color: colors.textSecondary }]}>
+                          Decline
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 </View>
-              </View>
-            ))}
+              );
+            })}
           </View>
         )}
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/context/auth';
 import { SharingService } from '@/services/sharing';
-import { SharingInvitation, WishlistShare, Profile } from '@/types/database.types';
+import { SharingInvitation, WishlistShare, Profile, UserSearchResult } from '@/types/database.types';
 import { Colors, Spacing, BorderRadius, Typography, Shadows } from '@/constants/theme';
 
 export default function InviteModal() {
@@ -21,9 +21,20 @@ export default function InviteModal() {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme === 'dark' ? 'dark' : 'light'];
 
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<UserSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [invitingUserId, setInvitingUserId] = useState<string | null>(null);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Direct email invite state
   const [email, setEmail] = useState('');
-  const [isSending, setIsSending] = useState(false);
-  const [activeShares, setActiveShares] = useState<(WishlistShare & { viewer_profile?: Profile })[]>([]);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [showEmailSection, setShowEmailSection] = useState(false);
+
+  // Shares & Pending Invites
+  const [activeShares, setActiveShares] = useState<(WishlistShare & { viewer_profile?: Profile; viewer_email?: string })[]>([]);
   const [pendingInvites, setPendingInvites] = useState<SharingInvitation[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -45,28 +56,102 @@ export default function InviteModal() {
     loadSharingData();
   }, [loadSharingData]);
 
-  const handleSendInvite = async () => {
-    if (!user) return;
-    const cleanEmail = email.trim().toLowerCase();
+  // Debounced search for registered app users
+  useEffect(() => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
 
-    if (!cleanEmail || !cleanEmail.includes('@')) {
+    const trimmed = searchQuery.trim();
+    if (trimmed.length < 2) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    searchTimeoutRef.current = setTimeout(async () => {
+      if (!user) return;
+      const { users, error } = await SharingService.searchUsers(trimmed, user.id);
+      setIsSearching(false);
+      if (!error && users) {
+        setSearchResults(users);
+      }
+    }, 300);
+
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+    };
+  }, [searchQuery, user]);
+
+  // Invite an existing app user selected from search
+  const handleInviteUser = async (targetUser: UserSearchResult) => {
+    if (!user) return;
+
+    if (targetUser.status === 'connected') {
+      Alert.alert('Already Connected', `${targetUser.display_name || 'This user'} is already an active partner viewing your wishlist.`);
+      return;
+    }
+
+    if (targetUser.status === 'pending') {
+      Alert.alert('Invite Pending', `An invitation has already been sent to ${targetUser.display_name || 'this user'}.`);
+      return;
+    }
+
+    const targetEmail = targetUser.email || '';
+    if (!targetEmail) {
+      Alert.alert('Cannot Invite', 'This user does not have an associated email address.');
+      return;
+    }
+
+    setInvitingUserId(targetUser.id);
+
+    const { error } = await SharingService.invitePartner(user.id, targetEmail, targetUser.id);
+
+    setInvitingUserId(null);
+
+    if (error) {
+      Alert.alert('Invitation Failed', error.message);
+    } else {
+      Alert.alert(
+        'Invitation Sent!',
+        `An invitation was sent to ${targetUser.display_name || targetEmail}. When they open the app, they can accept access immediately.`
+      );
+      // Re-trigger search to update statuses
+      if (searchQuery.trim().length >= 2) {
+        const { users } = await SharingService.searchUsers(searchQuery.trim(), user.id);
+        if (users) setSearchResults(users);
+      }
+      loadSharingData();
+    }
+  };
+
+  // Invite by email directly (for users not yet on the app or searched)
+  const handleSendEmailInvite = async (customEmail?: string) => {
+    if (!user) return;
+    const targetEmail = (customEmail || email).trim().toLowerCase();
+
+    if (!targetEmail || !targetEmail.includes('@')) {
       Alert.alert('Invalid Email', 'Please enter a valid email address.');
       return;
     }
 
-    setIsSending(true);
+    setIsSendingEmail(true);
 
-    const { error } = await SharingService.invitePartner(user.id, cleanEmail);
+    const { error } = await SharingService.invitePartner(user.id, targetEmail);
 
-    setIsSending(false);
+    setIsSendingEmail(false);
 
     if (error) {
       Alert.alert('Invitation Failed', error.message);
     } else {
       setEmail('');
+      setSearchQuery('');
       Alert.alert(
         'Invitation Created!',
-        `An invitation was generated for ${cleanEmail}. When they open the app and sign in with this email, they will see your wishlist!`
+        `An invitation was created for ${targetEmail}. When they download the app and sign in with this email, they will see your wishlist!`
       );
       loadSharingData();
     }
@@ -109,6 +194,8 @@ export default function InviteModal() {
     ]);
   };
 
+  const isEmailFormat = (str: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str.trim());
+
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: colors.background }}
@@ -126,59 +213,216 @@ export default function InviteModal() {
             Share Your Wishlist
           </Text>
           <Text style={[styles.infoBody, { color: colors.textSecondary }]}>
-            Invite your partner or a trusted person to view your wishlist. They will be able to see
-            your gift ideas and dates, and secretly mark items they buy so you don't receive duplicates.
+            Search for friends or partners registered on the app, or invite someone by email.
+            They will be able to see your gift ideas and secretly mark items they buy.
           </Text>
         </View>
       </View>
 
-      {/* Invite Form */}
+      {/* Main Search Section */}
       <View
         style={[
           styles.card,
           { backgroundColor: colors.card, borderColor: colors.cardBorder },
           Shadows?.subtle,
         ]}>
-        <Text style={[styles.sectionHeading, { color: colors.text }]}>Invite by Email</Text>
+        <Text style={[styles.sectionHeading, { color: colors.text }]}>Find Someone on the App</Text>
         <Text style={[styles.sectionSubtitle, { color: colors.textSecondary }]}>
-          Enter the email address of the person you want to invite.
+          Search for another user by their name or email address.
         </Text>
 
-        <View style={styles.inputRow}>
-          <View
-            style={[
-              styles.inputWrapper,
-              { backgroundColor: colors.backgroundElement, borderColor: colors.border },
-            ]}>
-            <Ionicons name="mail-outline" size={18} color={colors.textMuted} style={{ marginRight: 6 }} />
-            <TextInput
-              style={[styles.input, { color: colors.text }]}
-              placeholder="partner@example.com"
-              placeholderTextColor={colors.textMuted}
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-          </View>
-
-          <TouchableOpacity
-            style={[
-              styles.sendButton,
-              { backgroundColor: colors.primary },
-              isSending && { opacity: 0.7 },
-            ]}
-            onPress={handleSendInvite}
-            disabled={isSending}
-            activeOpacity={0.8}>
-            {isSending ? (
-              <ActivityIndicator color="#FFFFFF" size="small" />
-            ) : (
-              <Text style={styles.sendButtonText}>Invite</Text>
-            )}
-          </TouchableOpacity>
+        <View
+          style={[
+            styles.searchWrapper,
+            { backgroundColor: colors.backgroundElement, borderColor: colors.border },
+          ]}>
+          <Ionicons name="search-outline" size={18} color={colors.textMuted} style={{ marginRight: 8 }} />
+          <TextInput
+            style={[styles.input, { color: colors.text }]}
+            placeholder="Search by name or email..."
+            placeholderTextColor={colors.textMuted}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {isSearching ? (
+            <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 6 }} />
+          ) : searchQuery.length > 0 ? (
+            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+              <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+            </TouchableOpacity>
+          ) : null}
         </View>
+
+        {/* Search Results List */}
+        {searchQuery.trim().length >= 2 && (
+          <View style={styles.resultsContainer}>
+            {isSearching ? (
+              <View style={styles.searchStatusBox}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={[styles.searchStatusText, { color: colors.textSecondary }]}>Searching users...</Text>
+              </View>
+            ) : searchResults.length > 0 ? (
+              <View style={styles.resultsList}>
+                {searchResults.map((targetUser) => {
+                  const initial = (targetUser.display_name || targetUser.email || '?').charAt(0).toUpperCase();
+                  const isInvitingThis = invitingUserId === targetUser.id;
+
+                  return (
+                    <View
+                      key={targetUser.id}
+                      style={[
+                        styles.userResultRow,
+                        { borderColor: colors.border },
+                      ]}>
+                      <View style={[styles.avatarCircle, { backgroundColor: colors.primaryLight }]}>
+                        <Text style={[styles.avatarText, { color: colors.primary }]}>{initial}</Text>
+                      </View>
+
+                      <View style={{ flex: 1, marginRight: Spacing.sm }}>
+                        <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
+                          {targetUser.display_name || 'App User'}
+                        </Text>
+                        {targetUser.email ? (
+                          <Text style={[styles.userEmail, { color: colors.textSecondary }]} numberOfLines={1}>
+                            {targetUser.email}
+                          </Text>
+                        ) : null}
+                      </View>
+
+                      {targetUser.status === 'connected' ? (
+                        <View style={[styles.statusBadge, { backgroundColor: colors.successLight }]}>
+                          <Ionicons name="checkmark-circle" size={14} color={colors.success} style={{ marginRight: 4 }} />
+                          <Text style={[styles.statusBadgeText, { color: colors.success }]}>Connected</Text>
+                        </View>
+                      ) : targetUser.status === 'pending' ? (
+                        <View style={[styles.statusBadge, { backgroundColor: colors.warningLight }]}>
+                          <Ionicons name="time" size={14} color={colors.warning} style={{ marginRight: 4 }} />
+                          <Text style={[styles.statusBadgeText, { color: colors.warning }]}>Pending</Text>
+                        </View>
+                      ) : (
+                        <TouchableOpacity
+                          style={[
+                            styles.inviteUserBtn,
+                            { backgroundColor: colors.primary },
+                            isInvitingThis && { opacity: 0.7 },
+                          ]}
+                          onPress={() => handleInviteUser(targetUser)}
+                          disabled={isInvitingThis}
+                          activeOpacity={0.8}>
+                          {isInvitingThis ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                          ) : (
+                            <>
+                              <Ionicons name="person-add-outline" size={14} color="#FFFFFF" style={{ marginRight: 4 }} />
+                              <Text style={styles.inviteUserBtnText}>Invite</Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            ) : (
+              <View style={[styles.noResultBox, { backgroundColor: colors.backgroundElement, borderColor: colors.border }]}>
+                <Ionicons name="alert-circle-outline" size={22} color={colors.textMuted} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.noResultTitle, { color: colors.text }]}>
+                    No registered user found for "{searchQuery.trim()}"
+                  </Text>
+                  <Text style={[styles.noResultSubtitle, { color: colors.textSecondary }]}>
+                    Not on the app yet? You can invite them with an email address below.
+                  </Text>
+                </View>
+
+                {isEmailFormat(searchQuery) && (
+                  <TouchableOpacity
+                    style={[styles.quickEmailBtn, { backgroundColor: colors.primary }]}
+                    onPress={() => handleSendEmailInvite(searchQuery.trim())}
+                    disabled={isSendingEmail}>
+                    {isSendingEmail ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.quickEmailBtnText}>Invite Email</Text>
+                    )}
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </View>
+        )}
+      </View>
+
+      {/* Fallback Email Invite Section */}
+      <View
+        style={[
+          styles.card,
+          { backgroundColor: colors.card, borderColor: colors.cardBorder },
+          Shadows?.subtle,
+        ]}>
+        <TouchableOpacity
+          style={styles.collapsibleHeader}
+          onPress={() => setShowEmailSection(!showEmailSection)}
+          activeOpacity={0.7}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flex: 1 }}>
+            <Ionicons name="mail-outline" size={20} color={colors.primary} />
+            <View>
+              <Text style={[styles.sectionHeading, { color: colors.text }]}>
+                Invite by Email (Not on App Yet)
+              </Text>
+              <Text style={[styles.sectionSubtitle, { color: colors.textSecondary, marginBottom: 0 }]}>
+                Send an invite to someone who hasn't joined the app yet.
+              </Text>
+            </View>
+          </View>
+          <Ionicons
+            name={showEmailSection ? 'chevron-up' : 'chevron-down'}
+            size={20}
+            color={colors.textSecondary}
+          />
+        </TouchableOpacity>
+
+        {showEmailSection && (
+          <View style={styles.emailFormContainer}>
+            <View style={styles.inputRow}>
+              <View
+                style={[
+                  styles.inputWrapper,
+                  { backgroundColor: colors.backgroundElement, borderColor: colors.border },
+                ]}>
+                <Ionicons name="mail" size={18} color={colors.textMuted} style={{ marginRight: 6 }} />
+                <TextInput
+                  style={[styles.input, { color: colors.text }]}
+                  placeholder="partner@example.com"
+                  placeholderTextColor={colors.textMuted}
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+
+              <TouchableOpacity
+                style={[
+                  styles.sendButton,
+                  { backgroundColor: colors.primary },
+                  isSendingEmail && { opacity: 0.7 },
+                ]}
+                onPress={() => handleSendEmailInvite()}
+                disabled={isSendingEmail}
+                activeOpacity={0.8}>
+                {isSendingEmail ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <Text style={styles.sendButtonText}>Send</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       </View>
 
       {/* Active Shares Section */}
@@ -196,7 +440,7 @@ export default function InviteModal() {
               { backgroundColor: colors.card, borderColor: colors.border },
             ]}>
             <Text style={[styles.emptySectionText, { color: colors.textSecondary }]}>
-              No active shares yet. Send an invite above!
+              No active shares yet. Search or invite a partner above!
             </Text>
           </View>
         ) : (
@@ -214,8 +458,13 @@ export default function InviteModal() {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.partnerName, { color: colors.text }]}>
-                    {share.viewer_profile?.display_name || 'Partner'}
+                    {share.viewer_profile?.display_name || share.viewer_email || 'Partner'}
                   </Text>
+                  {share.viewer_profile?.email && (
+                    <Text style={[styles.partnerSubText, { color: colors.textSecondary }]}>
+                      {share.viewer_profile.email}
+                    </Text>
+                  )}
                   <Text style={[styles.shareBadge, { color: colors.success }]}>
                     ● Active Viewer
                   </Text>
@@ -254,8 +503,13 @@ export default function InviteModal() {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.partnerName, { color: colors.text }]}>
-                    {inv.invitee_email}
+                    {inv.invitee_profile?.display_name || inv.invitee_email}
                   </Text>
+                  {inv.invitee_profile?.display_name && (
+                    <Text style={[styles.partnerSubText, { color: colors.textSecondary }]}>
+                      {inv.invitee_email}
+                    </Text>
+                  )}
                   <Text style={[styles.shareBadge, { color: colors.warning }]}>
                     Waiting for acceptance
                   </Text>
@@ -311,14 +565,7 @@ const styles = StyleSheet.create({
     ...Typography.caption,
     marginBottom: Spacing.xs,
   },
-  inputRow: {
-    flexDirection: 'row',
-    gap: Spacing.sm,
-    alignItems: 'center',
-    marginTop: Spacing.xs,
-  },
-  inputWrapper: {
-    flex: 1,
+  searchWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
@@ -330,6 +577,118 @@ const styles = StyleSheet.create({
     flex: 1,
     ...Typography.body,
     height: '100%',
+  },
+  resultsContainer: {
+    marginTop: Spacing.xs,
+  },
+  searchStatusBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: Spacing.md,
+    gap: Spacing.sm,
+  },
+  searchStatusText: {
+    ...Typography.caption,
+  },
+  resultsList: {
+    gap: Spacing.xs,
+  },
+  userResultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.xs,
+    borderBottomWidth: 1,
+  },
+  avatarCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: BorderRadius.full,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: Spacing.md,
+  },
+  avatarText: {
+    ...Typography.bodyBold,
+  },
+  userName: {
+    ...Typography.bodyBold,
+  },
+  userEmail: {
+    ...Typography.caption,
+    marginTop: 1,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadius.sm,
+  },
+  statusBadgeText: {
+    ...Typography.small,
+    fontWeight: '600',
+  },
+  inviteUserBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadius.md,
+  },
+  inviteUserBtnText: {
+    ...Typography.captionBold,
+    color: '#FFFFFF',
+  },
+  noResultBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: Spacing.md,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    gap: Spacing.md,
+    marginTop: Spacing.xs,
+  },
+  noResultTitle: {
+    ...Typography.bodyBold,
+    fontSize: 13,
+  },
+  noResultSubtitle: {
+    ...Typography.caption,
+    marginTop: 2,
+  },
+  quickEmailBtn: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadius.md,
+  },
+  quickEmailBtnText: {
+    ...Typography.captionBold,
+    color: '#FFFFFF',
+  },
+  collapsibleHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  emailFormContainer: {
+    marginTop: Spacing.sm,
+    paddingTop: Spacing.sm,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    alignItems: 'center',
+  },
+  inputWrapper: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: BorderRadius.md,
+    paddingHorizontal: Spacing.md,
+    height: 48,
   },
   sendButton: {
     height: 48,
@@ -377,6 +736,9 @@ const styles = StyleSheet.create({
   },
   partnerName: {
     ...Typography.bodyBold,
+  },
+  partnerSubText: {
+    ...Typography.small,
   },
   shareBadge: {
     ...Typography.small,

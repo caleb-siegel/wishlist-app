@@ -65,11 +65,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (existingProfile) {
         setProfile(existingProfile as Profile);
+        // Sync email if missing or changed
+        if (currentUser.email && existingProfile.email !== currentUser.email) {
+          supabase
+            .from('profiles')
+            .update({ email: currentUser.email })
+            .eq('id', currentUser.id)
+            .then();
+        }
       } else {
         // Create initial profile
         const newProfile: Partial<Profile> = {
           id: currentUser.id,
           display_name: displayName || currentUser.email?.split('@')[0] || 'Wishlist Owner',
+          email: currentUser.email,
           timezone: deviceTimezone,
         };
 
